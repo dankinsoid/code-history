@@ -102,16 +102,21 @@ export function activate(context: vscode.ExtensionContext) {
             return;
           }
           
-          // Create and show the webview panel
+          // Create and show the webview panel as a floating panel
           const panel = vscode.window.createWebviewPanel(
             'codeHistory',
             'Code History',
-            vscode.ViewColumn.Beside,
+            { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
             {
               enableScripts: true,
-              localResourceRoots: [vscode.Uri.file(context.extensionPath)]
+              localResourceRoots: [vscode.Uri.file(context.extensionPath)],
+              retainContextWhenHidden: true
             }
           );
+          
+          // Make the panel float over the editor
+          // @ts-ignore - Using internal API
+          panel.webview.options = { ...panel.webview.options, supportsHtmlOverlay: true };
           
           panel.webview.html = getWebviewContent(commits, document.getText(new vscode.Range(
             selection.start.line, 0,
@@ -124,6 +129,9 @@ export function activate(context: vscode.ExtensionContext) {
               switch (message.command) {
                 case 'showCommit':
                   vscode.env.openExternal(vscode.Uri.parse(`https://github.com/user/repo/commit/${message.hash}`));
+                  return;
+                case 'close':
+                  panel.dispose();
                   return;
               }
             },
@@ -349,66 +357,88 @@ function getWebviewContent(commits: CommitInfo[], currentContent: string): strin
         margin: 0;
         color: var(--vscode-foreground);
         background-color: var(--vscode-editor-background);
+        max-height: 60vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+        border: 1px solid var(--vscode-panel-border);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        border-radius: 4px;
       }
       .commit {
-        margin-bottom: 20px;
-        border-bottom: 1px solid var(--vscode-panel-border);
-        padding-bottom: 10px;
+        flex: 1;
+        overflow: auto;
+        padding: 0 10px;
       }
       .commit-header {
         display: flex;
         justify-content: space-between;
-        margin-bottom: 10px;
+        align-items: center;
+        margin-bottom: 8px;
         cursor: pointer;
-        padding: 8px;
+        padding: 6px;
         background-color: var(--vscode-panel-background);
+        border-radius: 3px;
       }
       .commit-header:hover {
         background-color: var(--vscode-list-hoverBackground);
       }
       .commit-info {
-        font-size: 0.9em;
+        font-size: 0.85em;
         color: var(--vscode-descriptionForeground);
       }
       .commit-message {
         font-weight: bold;
-        margin-bottom: 5px;
+        margin-bottom: 3px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 300px;
       }
       pre {
         background-color: var(--vscode-editor-background);
-        padding: 10px;
+        padding: 8px;
         overflow: auto;
         border: 1px solid var(--vscode-panel-border);
         border-radius: 3px;
         font-family: var(--vscode-editor-font-family);
         font-size: var(--vscode-editor-font-size);
-      }
-      .current-content {
-        margin-top: 20px;
-        padding: 10px;
-        border-top: 2px solid var(--vscode-activityBarBadge-background);
-      }
-      .current-content h3 {
-        margin-top: 0;
+        margin: 0 0 10px 0;
+        max-height: 300px;
       }
       .navigation {
         display: flex;
         justify-content: space-between;
-        margin-bottom: 15px;
-        position: sticky;
-        top: 0;
+        align-items: center;
+        padding: 8px 10px;
         background-color: var(--vscode-editor-background);
-        padding: 10px 0;
         border-bottom: 1px solid var(--vscode-panel-border);
         z-index: 10;
+      }
+      .title {
+        font-size: 14px;
+        font-weight: bold;
+        margin: 0;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
       button {
         background-color: var(--vscode-button-background);
         color: var(--vscode-button-foreground);
         border: none;
-        padding: 6px 12px;
+        padding: 4px 8px;
         cursor: pointer;
         border-radius: 2px;
+        font-size: 12px;
       }
       button:hover {
         background-color: var(--vscode-button-hoverBackground);
@@ -417,36 +447,67 @@ function getWebviewContent(commits: CommitInfo[], currentContent: string): strin
         opacity: 0.5;
         cursor: not-allowed;
       }
+      .close-button {
+        background-color: transparent;
+        color: var(--vscode-foreground);
+        padding: 2px 6px;
+        font-size: 16px;
+        line-height: 1;
+      }
+      .tabs {
+        display: flex;
+        border-bottom: 1px solid var(--vscode-panel-border);
+        background-color: var(--vscode-tab-inactiveBackground);
+      }
+      .tab {
+        padding: 6px 12px;
+        cursor: pointer;
+        border: none;
+        background: none;
+        color: var(--vscode-tab-inactiveForeground);
+        font-size: 12px;
+      }
+      .tab.active {
+        background-color: var(--vscode-tab-activeBackground);
+        color: var(--vscode-tab-activeForeground);
+        border-bottom: 2px solid var(--vscode-tab-activeBorder);
+      }
     </style>
   </head>
   <body>
-    <div class="navigation">
-      <h2>Code History</h2>
-      <div>
-        <button id="prev" disabled>Previous</button>
-        <span id="counter">1/${commits.length}</span>
-        <button id="next" ${commits.length <= 1 ? 'disabled' : ''}>Next</button>
-      </div>
-    </div>
-
-    <div id="commits">
-      ${commits.map((commit, index) => `
-        <div class="commit" id="commit-${index}" ${index > 0 ? 'style="display:none;"' : ''}>
-          <div class="commit-header" onclick="openCommit('${commit.hash}')">
-            <div>
-              <div class="commit-message">${escapeHtml(commit.message)}</div>
-              <div class="commit-info">${commit.author} - ${commit.date}</div>
-            </div>
-            <div class="commit-hash">${commit.hash.substring(0, 7)}</div>
-          </div>
-          <pre>${escapeHtml(commit.content)}</pre>
+    <div class="container">
+      <div class="navigation">
+        <div class="title">Code History</div>
+        <div class="controls">
+          <button id="prev" disabled>◀</button>
+          <span id="counter">1/${commits.length}</span>
+          <button id="next" ${commits.length <= 1 ? 'disabled' : ''}>▶</button>
+          <button class="close-button" id="close-btn">✕</button>
         </div>
-      `).join('')}
-    </div>
+      </div>
+      
+      <div class="tabs">
+        <button class="tab active" id="history-tab">History</button>
+        <button class="tab" id="current-tab">Current</button>
+      </div>
 
-    <div class="current-content">
-      <h3>Current Content</h3>
-      <pre>${escapeHtml(currentContent)}</pre>
+      <div id="history-view">
+        ${commits.map((commit, index) => `
+          <div class="commit" id="commit-${index}" ${index > 0 ? 'style="display:none;"' : ''}>
+            <div class="commit-header" onclick="openCommit('${commit.hash}')">
+              <div>
+                <div class="commit-message">${escapeHtml(commit.message)}</div>
+                <div class="commit-info">${commit.author} - ${commit.date} (${commit.hash.substring(0, 7)})</div>
+              </div>
+            </div>
+            <pre>${escapeHtml(commit.content)}</pre>
+          </div>
+        `).join('')}
+      </div>
+      
+      <div id="current-view" style="display:none; padding: 0 10px; overflow: auto;">
+        <pre>${escapeHtml(currentContent)}</pre>
+      </div>
     </div>
 
     <script>
@@ -485,6 +546,26 @@ function getWebviewContent(commits: CommitInfo[], currentContent: string): strin
         if (currentIndex < totalCommits - 1) {
           showCommit(currentIndex + 1);
         }
+      });
+      
+      document.getElementById('close-btn').addEventListener('click', () => {
+        vscode.postMessage({
+          command: 'close'
+        });
+      });
+      
+      document.getElementById('history-tab').addEventListener('click', () => {
+        document.getElementById('history-tab').classList.add('active');
+        document.getElementById('current-tab').classList.remove('active');
+        document.getElementById('history-view').style.display = 'block';
+        document.getElementById('current-view').style.display = 'none';
+      });
+      
+      document.getElementById('current-tab').addEventListener('click', () => {
+        document.getElementById('current-tab').classList.add('active');
+        document.getElementById('history-tab').classList.remove('active');
+        document.getElementById('history-view').style.display = 'none';
+        document.getElementById('current-view').style.display = 'block';
       });
       
       function openCommit(hash) {
