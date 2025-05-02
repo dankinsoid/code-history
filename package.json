@@ -18,6 +18,14 @@
         "title": "Show Line History"
       },
       {
+        "command": "codehistory.showHistoryAsCompletions",
+        "title": "Show Line History as Completions"
+      },
+      {
+        "command": "codehistory.showHistoryAsInlineCompletions",
+        "title": "Show Line History as Inline Completions"
+      },
+      {
         "command": "codehistory.nextCommit",
         "title": "Next Commit"
       },
@@ -28,12 +36,26 @@
       {
         "command": "codehistory.toggleViewMode",
         "title": "Toggle History View Mode"
+      },
+      {
+        "command": "codehistory.showCommitDetails",
+        "title": "Show Commit Details"
       }
     ],
     "menus": {
       "editor/context": [
         {
           "command": "codehistory.showLineHistory",
+          "when": "editorTextFocus && !editorReadonly",
+          "group": "navigation"
+        },
+        {
+          "command": "codehistory.showHistoryAsCompletions",
+          "when": "editorTextFocus && !editorReadonly",
+          "group": "navigation"
+        },
+        {
+          "command": "codehistory.showHistoryAsInlineCompletions",
           "when": "editorTextFocus && !editorReadonly",
           "group": "navigation"
         }

@@ -58,6 +58,216 @@ interface CommitInfo {
   content: string;
 }
 
+// Class for providing line history completions
+class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
+  async provideCompletionItems(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    token: vscode.CancellationToken,
+    context: vscode.CompletionContext
+  ): Promise<vscode.CompletionItem[] | undefined> {
+    try {
+      // Only provide completions when explicitly triggered
+      if (context.triggerKind !== vscode.CompletionTriggerKind.Invoke) {
+        return undefined;
+      }
+      
+      // Get line history for the current line
+      const filePath = document.uri.fsPath;
+      const lineNumber = position.line + 1; // Convert to 1-based
+      
+      // Show a loading indicator
+      vscode.window.setStatusBarMessage('Loading line history...', 2000);
+      
+      // Get git root path
+      const gitRootPath = await getGitRootPath(filePath);
+      const relativeFilePath = path.relative(gitRootPath, filePath);
+      
+      // Get commit hashes from git blame
+      const blameCommand = `git -C "${gitRootPath}" blame -L ${lineNumber},${lineNumber} "${relativeFilePath}" --porcelain`;
+      log(`Executing git blame command: ${blameCommand}`);
+      
+      const { stdout: blameOutput } = await execAsync(blameCommand);
+      if (!blameOutput.trim()) {
+        return undefined;
+      }
+      
+      // Parse blame output to get commit hashes
+      const commitHashes = new Set<string>();
+      const blameLines = blameOutput.split('\n');
+      
+      for (let i = 0; i < blameLines.length; i++) {
+        const line = blameLines[i];
+        if (line.match(/^[0-9a-f]{40}\s/)) {
+          const hash = line.split(' ')[0];
+          if (hash !== '0000000000000000000000000000000000000000') {
+            commitHashes.add(hash);
+          }
+        }
+      }
+      
+      if (commitHashes.size === 0) {
+        return undefined;
+      }
+      
+      // Create completion items for each commit
+      const completionItems: vscode.CompletionItem[] = [];
+      
+      for (const hash of commitHashes) {
+        // Get commit details
+        const { stdout: commitDetails } = await execAsync(
+          `git -C "${gitRootPath}" show --format="%H|%ad|%an|%s" --date=short ${hash} -s`,
+          { encoding: 'utf8' }
+        );
+        
+        const [commitHash, date, author, message] = commitDetails.trim().split('|');
+        
+        // Get the file content at this commit
+        const content = await getFileStateAtCommit(gitRootPath, relativeFilePath, hash, lineNumber, lineNumber);
+        
+        // Extract just the line content without the line number prefix
+        const lineContent = content.replace(/^\d+:\s/, '');
+        
+        // Create completion item
+        const item = new vscode.CompletionItem(
+          `${date} - ${message} (${commitHash.substring(0, 7)})`,
+          vscode.CompletionItemKind.Text
+        );
+        
+        item.insertText = lineContent;
+        item.detail = `${author} - ${date}`;
+        item.documentation = new vscode.MarkdownString(
+          `**Commit:** ${commitHash.substring(0, 7)}\n` +
+          `**Author:** ${author}\n` +
+          `**Date:** ${date}\n` +
+          `**Message:** ${message}\n\n` +
+          `\`\`\`\n${content}\n\`\`\``
+        );
+        
+        completionItems.push(item);
+      }
+      
+      return completionItems;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      log(`Error providing completions: ${errorMessage}`);
+      return undefined;
+    }
+  }
+}
+
+// Class for providing inline completions
+class GitHistoryInlineCompletionProvider implements vscode.InlineCompletionItemProvider {
+  async provideInlineCompletionItems(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    context: vscode.InlineCompletionContext,
+    token: vscode.CancellationToken
+  ): Promise<vscode.InlineCompletionItem[] | vscode.InlineCompletionList | undefined> {
+    try {
+      // Get line history for the current line
+      const filePath = document.uri.fsPath;
+      const lineNumber = position.line + 1; // Convert to 1-based
+      
+      // Get git root path
+      const gitRootPath = await getGitRootPath(filePath);
+      const relativeFilePath = path.relative(gitRootPath, filePath);
+      
+      // Get commit hashes from git blame
+      const blameCommand = `git -C "${gitRootPath}" blame -L ${lineNumber},${lineNumber} "${relativeFilePath}" --porcelain`;
+      
+      const { stdout: blameOutput } = await execAsync(blameCommand);
+      if (!blameOutput.trim()) {
+        return undefined;
+      }
+      
+      // Parse blame output to get commit hashes
+      const commitHashes = new Set<string>();
+      const blameLines = blameOutput.split('\n');
+      
+      for (let i = 0; i < blameLines.length; i++) {
+        const line = blameLines[i];
+        if (line.match(/^[0-9a-f]{40}\s/)) {
+          const hash = line.split(' ')[0];
+          if (hash !== '0000000000000000000000000000000000000000') {
+            commitHashes.add(hash);
+          }
+        }
+      }
+      
+      if (commitHashes.size === 0) {
+        return undefined;
+      }
+      
+      // Create inline completion items for each commit
+      const inlineCompletionItems: vscode.InlineCompletionItem[] = [];
+      
+      for (const hash of commitHashes) {
+        // Get commit details
+        const { stdout: commitDetails } = await execAsync(
+          `git -C "${gitRootPath}" show --format="%H|%ad|%an|%s" --date=short ${hash} -s`,
+          { encoding: 'utf8' }
+        );
+        
+        const [commitHash, date, author, message] = commitDetails.trim().split('|');
+        
+        // Get the file content at this commit
+        const content = await getFileStateAtCommit(gitRootPath, relativeFilePath, hash, lineNumber, lineNumber);
+        
+        // Extract just the line content without the line number prefix
+        const lineContent = content.replace(/^\d+:\s/, '');
+        
+        // Create inline completion item
+        const item = new vscode.InlineCompletionItem(
+          lineContent,
+          new vscode.Range(position.line, 0, position.line, document.lineAt(position.line).text.length)
+        );
+        
+        item.command = {
+          title: 'Show Commit Details',
+          command: 'codehistory.showCommitDetails',
+          arguments: [commitHash, date, author, message]
+        };
+        
+        inlineCompletionItems.push(item);
+      }
+      
+      return {
+        items: inlineCompletionItems,
+        suppressSuggestionDetails: false
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      log(`Error providing inline completions: ${errorMessage}`);
+      return undefined;
+    }
+  }
+}
+
+// Helper function to get the git root path
+async function getGitRootPath(filePath: string): Promise<string> {
+  try {
+    const fileDir = path.dirname(filePath);
+    const { stdout } = await execAsync(`git -C "${fileDir}" rev-parse --show-toplevel`);
+    return stdout.trim();
+  } catch (error) {
+    // Fallback to manual .git directory detection
+    let currentDir = path.dirname(filePath);
+    
+    while (currentDir !== path.parse(currentDir).root) {
+      const gitDirPath = path.join(currentDir, '.git');
+      
+      if (fs.existsSync(gitDirPath)) {
+        return currentDir;
+      }
+      
+      currentDir = path.dirname(currentDir);
+    }
+    
+    throw new Error("Not a git repository");
+  }
+}
+
 // Class for providing CodeLens
 class GitHistoryCodeLensProvider implements vscode.CodeLensProvider {
   private _onDidChangeCodeLenses: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
@@ -95,6 +305,22 @@ export function activate(context: vscode.ExtensionContext) {
   // This line of code will only be executed once when your extension is activated
   console.log('Congratulations, your extension "codehistory" is now active!');
 
+  // Register the completion providers
+  const completionProvider = new GitHistoryCompletionProvider();
+  const completionRegistration = vscode.languages.registerCompletionItemProvider(
+    { scheme: 'file' },
+    completionProvider
+  );
+  context.subscriptions.push(completionRegistration);
+  
+  // Register the inline completion provider
+  const inlineCompletionProvider = new GitHistoryInlineCompletionProvider();
+  const inlineCompletionRegistration = vscode.languages.registerInlineCompletionItemProvider(
+    { scheme: 'file' },
+    inlineCompletionProvider
+  );
+  context.subscriptions.push(inlineCompletionRegistration);
+  
   // Register the CodeLens provider only if enabled in settings
   let codeLensRegistration: vscode.Disposable | undefined;
   const codeLensProvider = new GitHistoryCodeLensProvider();
@@ -130,6 +356,46 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // Register command to show commit details
+  const showCommitDetailsDisposable = vscode.commands.registerCommand(
+    'codehistory.showCommitDetails',
+    (hash: string, date: string, author: string, message: string) => {
+      vscode.window.showInformationMessage(
+        `Commit: ${hash.substring(0, 7)} | ${date} | ${author} | ${message}`
+      );
+    }
+  );
+  
+  // Register command to show line history as completions
+  const showHistoryAsCompletionsDisposable = vscode.commands.registerCommand(
+    'codehistory.showHistoryAsCompletions',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor found');
+        return;
+      }
+      
+      // Trigger the completion provider
+      await vscode.commands.executeCommand('editor.action.triggerSuggest');
+    }
+  );
+  
+  // Register command to show line history as inline completions
+  const showHistoryAsInlineCompletionsDisposable = vscode.commands.registerCommand(
+    'codehistory.showHistoryAsInlineCompletions',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor found');
+        return;
+      }
+      
+      // Trigger the inline completion provider
+      await vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
+    }
+  );
+  
   // Register the command that will show history in a peek view
   const lineHistoryDisposable = vscode.commands.registerCommand('codehistory.showLineHistory', async (uri?: vscode.Uri, range?: vscode.Range) => {
     // Show the output channel
@@ -269,7 +535,10 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   context.subscriptions.push(
-    lineHistoryDisposable
+    lineHistoryDisposable,
+    showHistoryAsCompletionsDisposable,
+    showHistoryAsInlineCompletionsDisposable,
+    showCommitDetailsDisposable
     // Don't register nextCommit and prevCommit here - they're registered dynamically when needed
   );
 }
