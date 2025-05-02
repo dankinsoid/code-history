@@ -182,7 +182,7 @@ export function activate(context: vscode.ExtensionContext) {
           }
           
           // Show history in a peek view
-          await showHistoryInPeekView(document, startLine - 1, endLine - 1, commits);
+          await showHistoryInPeekView(document, startLine - 1, endLine - 1, commits, context);
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           log(`Error in progress handler: ${errorMessage}`);
@@ -246,9 +246,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     helloWorldDisposable, 
-    lineHistoryDisposable,
-    vscode.commands.registerCommand('codehistory.nextCommit', () => {}),
-    vscode.commands.registerCommand('codehistory.prevCommit', () => {})
+    lineHistoryDisposable
+    // Don't register nextCommit and prevCommit here - they're registered dynamically when needed
   );
 }
 
@@ -398,7 +397,8 @@ async function showHistoryInPeekView(
   document: vscode.TextDocument,
   startLine: number,
   endLine: number,
-  commits: CommitInfo[]
+  commits: CommitInfo[],
+  context: vscode.ExtensionContext
 ): Promise<void> {
   // Create a virtual document provider for showing history
   const historyProvider = new class implements vscode.TextDocumentContentProvider {
@@ -446,6 +446,13 @@ async function showHistoryInPeekView(
   const uri = vscode.Uri.parse(`git-history:${document.uri.fsPath}`);
   
   // Register commands for navigating between commits
+  // First dispose any existing commands with the same ID
+  const existingDisposables = context.subscriptions.filter(d => 
+    (d as any)._command === 'codehistory.nextCommit' || 
+    (d as any)._command === 'codehistory.prevCommit'
+  );
+  existingDisposables.forEach(d => d.dispose());
+  
   const nextDisposable = vscode.commands.registerCommand('codehistory.nextCommit', () => {
     if (historyProvider.currentCommitIndex < commits.length - 1) {
       historyProvider.currentCommitIndex++;
@@ -485,12 +492,24 @@ async function showHistoryInPeekView(
     );
     
     if (!isHistoryOpen) {
+      log('History view closed, cleaning up resources');
       registration.dispose();
       nextDisposable.dispose();
       prevDisposable.dispose();
       nextButton.dispose();
       prevButton.dispose();
       disposable.dispose();
+      
+      // Re-register empty commands to prevent errors if status bar buttons are clicked after closing
+      const emptyNextCmd = vscode.commands.registerCommand('codehistory.nextCommit', () => {
+        vscode.window.showInformationMessage('History view is closed');
+      });
+      const emptyPrevCmd = vscode.commands.registerCommand('codehistory.prevCommit', () => {
+        vscode.window.showInformationMessage('History view is closed');
+      });
+      
+      // These will be disposed when the extension is deactivated
+      context.subscriptions.push(emptyNextCmd, emptyPrevCmd);
     }
   });
 }
