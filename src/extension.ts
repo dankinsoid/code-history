@@ -146,7 +146,13 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         );
         
         // Set the text that will be inserted when selected
-        item.insertText = commit.content;
+        // Create a snippet that replaces the entire line
+        const lineText = document.lineAt(position.line).text;
+        item.insertText = new vscode.SnippetString(commit.content);
+        item.range = new vscode.Range(
+          position.line, 0,
+          position.line, lineText.length
+        );
         
         // Add details that will show in the completion item
         item.detail = `${commit.author} - ${commit.date}`;
