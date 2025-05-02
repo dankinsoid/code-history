@@ -139,9 +139,39 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         // Skip commits where we couldn't extract the line content
         if (!commit.content) continue;
         
-        // Create completion item with a label that will show in the UI
+        // Create completion item with a label that shows the difference
+        // Get the current line text for comparison
+        const currentLineText = document.lineAt(position.line).text;
+        
+        // Create a label that shows the difference
+        let label = commit.content.substring(0, 30).trim();
+        
+        // If we can calculate a meaningful diff, show it in the label
+        if (currentLineText && commit.content) {
+          // Find the first different character
+          let diffIndex = 0;
+          const minLength = Math.min(currentLineText.length, commit.content.length);
+          
+          while (diffIndex < minLength && currentLineText[diffIndex] === commit.content[diffIndex]) {
+            diffIndex++;
+          }
+          
+          // Create a label that highlights the difference
+          if (diffIndex < minLength) {
+            // Show context before the difference
+            const contextStart = Math.max(0, diffIndex - 10);
+            const prefix = diffIndex > 10 ? '...' : '';
+            
+            // Extract the different parts
+            const currentSuffix = currentLineText.substring(diffIndex, diffIndex + 15);
+            const commitSuffix = commit.content.substring(diffIndex, diffIndex + 15);
+            
+            label = `${prefix}${commit.content.substring(contextStart, diffIndex)}[${commitSuffix}${commitSuffix.length >= 15 ? '...' : ''}]`;
+          }
+        }
+        
         const item = new vscode.CompletionItem(
-          `${commit.content.substring(0, 30).trim()}`,
+          label,
           vscode.CompletionItemKind.Text
         );
         
@@ -155,8 +185,7 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         );
         
         // Add details that will show in the completion item
-        item.detail = `${commit.author} - ${commit.date}`;
-          // `${commit.date} - ${commit.message.substring(0, 30)}${commit.message.length > 30 ? '...' : ''} (${commit.hash.substring(0, 7)})`,
+        item.detail = `${commit.date} - ${commit.hash.substring(0, 7)} - ${commit.message.substring(0, 30)}${commit.message.length > 30 ? '...' : ''}`;
         item.documentation = new vscode.MarkdownString(
           `**Commit:** ${commit.hash.substring(0, 7)}\n` +
           `**Author:** ${commit.author}\n` +
