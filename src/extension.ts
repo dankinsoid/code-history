@@ -83,26 +83,23 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       const gitRootPath = await getGitRootPath(filePath);
       const relativeFilePath = path.relative(gitRootPath, filePath);
       
-      // Get commit hashes from git blame
-      const blameCommand = `git -C "${gitRootPath}" blame -L ${lineNumber},${lineNumber} "${relativeFilePath}" --porcelain`;
-      log(`Executing git blame command: ${blameCommand}`);
+      // Get commit hashes from git log
+      const logCommand = `git -C "${gitRootPath}" log --format="%H" -L ${lineNumber},${lineNumber}:"${relativeFilePath}"`;
+      log(`Executing git log command: ${logCommand}`);
       
-      const { stdout: blameOutput } = await execAsync(blameCommand);
-      if (!blameOutput.trim()) {
+      const { stdout: logOutput } = await execAsync(logCommand);
+      if (!logOutput.trim()) {
         return undefined;
       }
       
-      // Parse blame output to get commit hashes
+      // Parse log output to get commit hashes
       const commitHashes = new Set<string>();
-      const blameLines = blameOutput.split('\n');
+      const logLines = logOutput.split('\n');
       
-      for (let i = 0; i < blameLines.length; i++) {
-        const line = blameLines[i];
-        if (line.match(/^[0-9a-f]{40}\s/)) {
-          const hash = line.split(' ')[0];
-          if (hash !== '0000000000000000000000000000000000000000') {
-            commitHashes.add(hash);
-          }
+      for (const line of logLines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.match(/^[0-9a-f]{40}$/)) {
+          commitHashes.add(trimmedLine);
         }
       }
       
@@ -173,25 +170,22 @@ class GitHistoryInlineCompletionProvider implements vscode.InlineCompletionItemP
       const gitRootPath = await getGitRootPath(filePath);
       const relativeFilePath = path.relative(gitRootPath, filePath);
       
-      // Get commit hashes from git blame
-      const blameCommand = `git -C "${gitRootPath}" blame -L ${lineNumber},${lineNumber} "${relativeFilePath}" --porcelain`;
+      // Get commit hashes from git log
+      const logCommand = `git -C "${gitRootPath}" log --format="%H" -L ${lineNumber},${lineNumber}:"${relativeFilePath}"`;
       
-      const { stdout: blameOutput } = await execAsync(blameCommand);
-      if (!blameOutput.trim()) {
+      const { stdout: logOutput } = await execAsync(logCommand);
+      if (!logOutput.trim()) {
         return undefined;
       }
       
-      // Parse blame output to get commit hashes
+      // Parse log output to get commit hashes
       const commitHashes = new Set<string>();
-      const blameLines = blameOutput.split('\n');
+      const logLines = logOutput.split('\n');
       
-      for (let i = 0; i < blameLines.length; i++) {
-        const line = blameLines[i];
-        if (line.match(/^[0-9a-f]{40}\s/)) {
-          const hash = line.split(' ')[0];
-          if (hash !== '0000000000000000000000000000000000000000') {
-            commitHashes.add(hash);
-          }
+      for (const line of logLines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.match(/^[0-9a-f]{40}$/)) {
+          commitHashes.add(trimmedLine);
         }
       }
       
@@ -629,27 +623,24 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
     const showDiff = config.get<boolean>('showDiff', false);
     log(`Show diff mode: ${showDiff}`);
     
-    // Step 1: Get commit hashes from git blame for the selected lines
-    const blameCommand = `git -C "${gitRootPath}" blame -L ${startLine},${endLine} "${relativeFilePath}" --porcelain`;
-    log(`Executing git blame command: ${blameCommand}`);
+    // Step 1: Get commit hashes from git log for the selected lines
+    const logCommand = `git -C "${gitRootPath}" log --format="%H" -L ${startLine},${endLine}:"${relativeFilePath}"`;
+    log(`Executing git log command: ${logCommand}`);
     
-    const { stdout: blameOutput } = await execAsync(blameCommand);
-    if (!blameOutput.trim()) {
-      log('Git blame command returned empty output');
+    const { stdout: logOutput } = await execAsync(logCommand);
+    if (!logOutput.trim()) {
+      log('Git log command returned empty output');
       return [];
     }
     
-    // Parse blame output to get commit hashes
+    // Parse log output to get commit hashes
     const commitHashes = new Set<string>();
-    const blameLines = blameOutput.split('\n');
+    const logLines = logOutput.split('\n');
     
-    for (let i = 0; i < blameLines.length; i++) {
-      const line = blameLines[i];
-      if (line.match(/^[0-9a-f]{40}\s/)) {
-        const hash = line.split(' ')[0];
-        if (hash !== '0000000000000000000000000000000000000000') {
-          commitHashes.add(hash);
-        }
+    for (const line of logLines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine.match(/^[0-9a-f]{40}$/)) {
+        commitHashes.add(trimmedLine);
       }
     }
     
