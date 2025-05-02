@@ -5,6 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
+import { TextDecoder } from 'util';
 
 const execAsync = promisify(exec);
 
@@ -24,6 +25,36 @@ interface CommitInfo {
   content: string;
 }
 
+// Class for providing CodeLens
+class GitHistoryCodeLensProvider implements vscode.CodeLensProvider {
+  private _onDidChangeCodeLenses: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
+  public readonly onDidChangeCodeLenses: vscode.Event<void> = this._onDidChangeCodeLenses.event;
+
+  public provideCodeLenses(
+    document: vscode.TextDocument,
+    token: vscode.CancellationToken
+  ): vscode.ProviderResult<vscode.CodeLens[]> {
+    const codeLenses: vscode.CodeLens[] = [];
+    
+    // Add a CodeLens for each line
+    for (let i = 0; i < document.lineCount; i++) {
+      const range = new vscode.Range(i, 0, i, 0);
+      const command = {
+        title: "Show line history",
+        command: "codehistory.showLineHistory",
+        arguments: [document.uri, range]
+      };
+      codeLenses.push(new vscode.CodeLens(range, command));
+    }
+    
+    return codeLenses;
+  }
+
+  public refresh(): void {
+    this._onDidChangeCodeLenses.fire();
+  }
+}
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -40,11 +71,45 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage('Hello World from CodeHistory!');
   });
 
-  const lineHistoryDisposable = vscode.commands.registerCommand('codehistory.showLineHistory', async () => {
+  // Register the CodeLens provider only if enabled in settings
+  let codeLensRegistration: vscode.Disposable | undefined;
+  const codeLensProvider = new GitHistoryCodeLensProvider();
+  
+  function updateCodeLensRegistration() {
+    if (codeLensRegistration) {
+      codeLensRegistration.dispose();
+      codeLensRegistration = undefined;
+    }
+    
+    const config = vscode.workspace.getConfiguration('codehistory');
+    const enableCodeLens = config.get<boolean>('enableCodeLens', false);
+    
+    if (enableCodeLens) {
+      codeLensRegistration = vscode.languages.registerCodeLensProvider(
+        { scheme: 'file' },
+        codeLensProvider
+      );
+      context.subscriptions.push(codeLensRegistration);
+    }
+  }
+  
+  // Initial setup
+  updateCodeLensRegistration();
+  
+  // Update when configuration changes
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('codehistory.enableCodeLens')) {
+        updateCodeLensRegistration();
+        codeLensProvider.refresh();
+      }
+    })
+  );
+
+  // Register the command that will show history in a peek view
+  const lineHistoryDisposable = vscode.commands.registerCommand('codehistory.showLineHistory', async (uri?: vscode.Uri, range?: vscode.Range) => {
     // Show the output channel
     outputChannel.clear();
-    outputChannel.show(true);
-    
     log('Command: showLineHistory started');
     
     // First check if git is installed
@@ -58,31 +123,45 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
     
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-      vscode.window.showErrorMessage('No active editor found');
-      return;
-    }
-
-    const document = editor.document;
+    // Handle both invocation methods (from context menu or from CodeLens)
+    let document: vscode.TextDocument;
+    let filePath: string;
+    let startLine: number;
+    let endLine: number;
     
-    // Check if the document is saved
-    if (document.isDirty) {
-      vscode.window.showWarningMessage('Please save the file before viewing its history');
-      return;
-    }
-    
-    const filePath = document.uri.fsPath;
-    const selection = editor.selection;
-    
-    // If selection is empty, use the current cursor line
-    let startLine, endLine;
-    if (selection.isEmpty) {
-      startLine = selection.active.line + 1; // Git uses 1-based line numbers
-      endLine = startLine;
+    if (uri && range) {
+      // Called from CodeLens
+      document = await vscode.workspace.openTextDocument(uri);
+      filePath = uri.fsPath;
+      startLine = range.start.line + 1; // Git uses 1-based line numbers
+      endLine = range.end.line + 1;
     } else {
-      startLine = selection.start.line + 1;
-      endLine = selection.end.line + 1;
+      // Called from context menu
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor found');
+        return;
+      }
+
+      document = editor.document;
+      
+      // Check if the document is saved
+      if (document.isDirty) {
+        vscode.window.showWarningMessage('Please save the file before viewing its history');
+        return;
+      }
+      
+      filePath = document.uri.fsPath;
+      const selection = editor.selection;
+      
+      // If selection is empty, use the current cursor line
+      if (selection.isEmpty) {
+        startLine = selection.active.line + 1; // Git uses 1-based line numbers
+        endLine = startLine;
+      } else {
+        startLine = selection.start.line + 1;
+        endLine = selection.end.line + 1;
+      }
     }
 
     // startLine and endLine are now defined above
@@ -102,42 +181,8 @@ export function activate(context: vscode.ExtensionContext) {
             return;
           }
           
-          // Create and show the webview panel as a floating panel
-          const panel = vscode.window.createWebviewPanel(
-            'codeHistory',
-            'Code History',
-            { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
-            {
-              enableScripts: true,
-              localResourceRoots: [vscode.Uri.file(context.extensionPath)],
-              retainContextWhenHidden: true
-            }
-          );
-          
-          // Make the panel float over the editor
-          // @ts-ignore - Using internal API
-          panel.webview.options = { ...panel.webview.options, supportsHtmlOverlay: true };
-          
-          panel.webview.html = getWebviewContent(commits, document.getText(new vscode.Range(
-            selection.start.line, 0,
-            selection.end.line, document.lineAt(selection.end.line).text.length
-          )));
-          
-          // Handle messages from the webview
-          panel.webview.onDidReceiveMessage(
-            message => {
-              switch (message.command) {
-                case 'showCommit':
-                  vscode.env.openExternal(vscode.Uri.parse(`https://github.com/user/repo/commit/${message.hash}`));
-                  return;
-                case 'close':
-                  panel.dispose();
-                  return;
-              }
-            },
-            undefined,
-            context.subscriptions
-          );
+          // Show history in a peek view
+          await showHistoryInPeekView(document, startLine - 1, endLine - 1, commits);
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           log(`Error in progress handler: ${errorMessage}`);
@@ -199,7 +244,12 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
 
-  context.subscriptions.push(helloWorldDisposable, lineHistoryDisposable);
+  context.subscriptions.push(
+    helloWorldDisposable, 
+    lineHistoryDisposable,
+    vscode.commands.registerCommand('codehistory.nextCommit', () => {}),
+    vscode.commands.registerCommand('codehistory.prevCommit', () => {})
+  );
 }
 
 async function getLineHistory(filePath: string, startLine: number, endLine: number): Promise<CommitInfo[]> {
@@ -341,6 +391,108 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
     console.error('Error getting line history:', error);
     throw new Error(`Failed to get line history: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+// Function to show history in a peek view
+async function showHistoryInPeekView(
+  document: vscode.TextDocument,
+  startLine: number,
+  endLine: number,
+  commits: CommitInfo[]
+): Promise<void> {
+  // Create a virtual document provider for showing history
+  const historyProvider = new class implements vscode.TextDocumentContentProvider {
+    private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
+    public readonly onDidChange = this._onDidChange.event;
+    
+    private _currentCommitIndex = 0;
+    
+    public get currentCommitIndex(): number {
+      return this._currentCommitIndex;
+    }
+    
+    public set currentCommitIndex(value: number) {
+      this._currentCommitIndex = value;
+      this._onDidChange.fire(this._uri);
+    }
+    
+    private _uri: vscode.Uri;
+    
+    constructor(uri: vscode.Uri) {
+      this._uri = uri;
+    }
+    
+    provideTextDocumentContent(_uri: vscode.Uri): string {
+      const commit = commits[this._currentCommitIndex];
+      
+      // Format the content with commit info at the top
+      return [
+        `// Commit: ${commit.hash.substring(0, 7)}`,
+        `// Author: ${commit.author}`,
+        `// Date: ${commit.date}`,
+        `// Message: ${commit.message}`,
+        `// (${this._currentCommitIndex + 1}/${commits.length})`,
+        `// Use 'Next Commit' and 'Previous Commit' buttons to navigate`,
+        '',
+        commit.content
+      ].join('\n');
+    }
+  }(vscode.Uri.parse(`git-history:${document.uri.fsPath}`));
+  
+  // Register the provider
+  const registration = vscode.workspace.registerTextDocumentContentProvider('git-history', historyProvider);
+  
+  // Create the URI for our virtual document
+  const uri = vscode.Uri.parse(`git-history:${document.uri.fsPath}`);
+  
+  // Register commands for navigating between commits
+  const nextDisposable = vscode.commands.registerCommand('codehistory.nextCommit', () => {
+    if (historyProvider.currentCommitIndex < commits.length - 1) {
+      historyProvider.currentCommitIndex++;
+    }
+  });
+  
+  const prevDisposable = vscode.commands.registerCommand('codehistory.prevCommit', () => {
+    if (historyProvider.currentCommitIndex > 0) {
+      historyProvider.currentCommitIndex--;
+    }
+  });
+  
+  // Show the peek view
+  await vscode.commands.executeCommand('editor.action.showReferences',
+    document.uri,
+    new vscode.Position(startLine, 0),
+    [new vscode.Location(uri, new vscode.Position(0, 0))]
+  );
+  
+  // Add navigation buttons to the editor toolbar
+  const nextButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  nextButton.text = "$(arrow-right) Next Commit";
+  nextButton.command = 'codehistory.nextCommit';
+  nextButton.tooltip = 'Show next commit';
+  nextButton.show();
+  
+  const prevButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
+  prevButton.text = "$(arrow-left) Previous Commit";
+  prevButton.command = 'codehistory.prevCommit';
+  prevButton.tooltip = 'Show previous commit';
+  prevButton.show();
+  
+  // Clean up when the peek view is closed
+  const disposable = vscode.window.onDidChangeVisibleTextEditors(() => {
+    const isHistoryOpen = vscode.window.visibleTextEditors.some(
+      editor => editor.document.uri.scheme === 'git-history'
+    );
+    
+    if (!isHistoryOpen) {
+      registration.dispose();
+      nextDisposable.dispose();
+      prevDisposable.dispose();
+      nextButton.dispose();
+      prevButton.dispose();
+      disposable.dispose();
+    }
+  });
 }
 
 function getWebviewContent(commits: CommitInfo[], currentContent: string): string {

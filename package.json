@@ -20,6 +20,14 @@
       {
         "command": "codehistory.showLineHistory",
         "title": "Show Line History"
+      },
+      {
+        "command": "codehistory.nextCommit",
+        "title": "Next Commit"
+      },
+      {
+        "command": "codehistory.prevCommit",
+        "title": "Previous Commit"
       }
     ],
     "menus": {
@@ -30,6 +38,16 @@
           "group": "navigation"
         }
       ]
+    },
+    "configuration": {
+      "title": "Code History",
+      "properties": {
+        "codehistory.enableCodeLens": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable CodeLens for line history"
+        }
+      }
     }
   },
   "scripts": {
