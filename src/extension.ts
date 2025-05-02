@@ -507,7 +507,7 @@ async function showHistoryInPeekView(
       
       try {
         const config = vscode.workspace.getConfiguration('codehistory');
-        const showDiff = config.get<boolean>('showDiff', true);
+        const showDiff = config.get<boolean>('showDiff', false);
         
         // Get the git root directory
         const { stdout: gitRootOutput } = await execAsync(`git -C "${path.dirname(document.uri.fsPath)}" rev-parse --show-toplevel`);
@@ -618,7 +618,7 @@ async function showHistoryInPeekView(
     provideTextDocumentContent(_uri: vscode.Uri): string {
       const commit = commits[this._currentCommitIndex];
       const config = vscode.workspace.getConfiguration('codehistory');
-      const showDiff = config.get<boolean>('showDiff', true);
+      const showDiff = config.get<boolean>('showDiff', false);
       
       // Load content if not already loaded
       if (!commit.content || commit.content.trim() === '') {
@@ -706,7 +706,7 @@ async function showHistoryInPeekView(
   // Add toggle button for diff/state view
   const toggleButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
   const config = vscode.workspace.getConfiguration('codehistory');
-  const showDiff = config.get<boolean>('showDiff', true);
+  const showDiff = config.get<boolean>('showDiff', false);
   toggleButton.text = showDiff ? "$(diff) Showing Diff" : "$(file) Showing State";
   toggleButton.command = 'codehistory.toggleViewMode';
   toggleButton.tooltip = 'Toggle between diff and state view';
@@ -715,7 +715,7 @@ async function showHistoryInPeekView(
   // Register toggle command
   const toggleDisposable = await commandManager.registerCommand('codehistory.toggleViewMode', async () => {
     const config = vscode.workspace.getConfiguration('codehistory');
-    const currentMode = config.get<boolean>('showDiff', true);
+    const currentMode = config.get<boolean>('showDiff', false);
     await config.update('showDiff', !currentMode, vscode.ConfigurationTarget.Global);
     
     try {

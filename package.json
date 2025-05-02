@@ -49,7 +49,7 @@
         },
         "codehistory.showDiff": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Show diff for each commit instead of the state of lines"
         }
       }
