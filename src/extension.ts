@@ -91,6 +91,8 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       if (!logOutput.trim()) {
         return undefined;
       }
+
+      console.log(`Log output: ${logOutput}`);
       
       // Parse log output to get commit hashes
       const commitHashes = new Set<string>();
