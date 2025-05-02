@@ -16,8 +16,21 @@
       {
         "command": "codehistory.helloWorld",
         "title": "Hello World"
+      },
+      {
+        "command": "codehistory.showLineHistory",
+        "title": "Show Line History"
       }
-    ]
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codehistory.showLineHistory",
+          "when": "editorTextFocus && !editorReadonly",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
