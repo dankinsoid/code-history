@@ -411,8 +411,8 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
             );
             const parentHash = parentOutput.trim();
             
-            // Then get the diff between parent and this commit for the selected lines
-            const diffCommand = `git -C "${gitRootPath}" diff ${parentHash} ${hash} -- "${relativeFilePath}" | grep -A 10000 -E "^@@.*\\+${startLine}(,|$)" | head -n 100`;
+            // Use git show with -U option to show the diff with context
+            const diffCommand = `git -C "${gitRootPath}" show --unified=5 ${hash} -- "${relativeFilePath}"`;
             log(`Executing diff command: ${diffCommand}`);
             
             try {
@@ -420,11 +420,62 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
               
               // Process the diff output to extract just the relevant lines
               const diffLines = diffOutput.split('\n');
-              const relevantLines = diffLines.filter(line => 
-                line.startsWith('+') || line.startsWith('-') || line.startsWith(' ')
-              ).map(line => line);
+              
+              // Find the diff hunks that include our lines of interest
+              let inHunk = false;
+              let hunkStartLine = 0;
+              let relevantLines: string[] = [];
+              
+              for (const line of diffLines) {
+                // Look for diff header lines
+                if (line.startsWith('@@')) {
+                  // Parse the hunk header to get line numbers
+                  const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+                  if (match) {
+                    hunkStartLine = parseInt(match[1], 10);
+                    inHunk = true;
+                    relevantLines.push(line);
+                  } else {
+                    inHunk = false;
+                  }
+                } 
+                // If we're in a hunk, check if it contains our lines of interest
+                else if (inHunk) {
+                  // Include the line if it's part of the diff
+                  if (line.startsWith('+') || line.startsWith('-') || line.startsWith(' ')) {
+                    // Calculate the current line number in the new file
+                    if (line.startsWith('+')) {
+                      // This is a line in the new file
+                      const currentLine = hunkStartLine++;
+                      // Check if this line is in our range of interest
+                      if (currentLine >= startLine && currentLine <= endLine) {
+                        relevantLines.push(line);
+                      }
+                    } else if (line.startsWith(' ')) {
+                      // This is a context line that exists in both files
+                      const currentLine = hunkStartLine++;
+                      // Check if this line is in our range of interest
+                      if (currentLine >= startLine && currentLine <= endLine) {
+                        relevantLines.push(line);
+                      }
+                    } else if (line.startsWith('-')) {
+                      // This is a line that was removed, always include it
+                      relevantLines.push(line);
+                    }
+                  } else {
+                    // End of hunk
+                    inHunk = false;
+                  }
+                }
+              }
               
               content = relevantLines.join('\n');
+              
+              // If we didn't find any relevant lines in the diff, fall back to showing the state
+              if (!content.trim()) {
+                log('No relevant changes found in diff, falling back to file state');
+                content = await getFileStateAtCommit(gitRootPath, relativeFilePath, hash, startLine, endLine);
+              }
             } catch (diffError) {
               log(`Error getting diff: ${diffError instanceof Error ? diffError.message : String(diffError)}`);
               // If diff fails, fall back to showing the state
@@ -483,7 +534,20 @@ async function getFileStateAtCommit(
     
     // Extract just the lines we're interested in
     const lines = fileContent.split('\n');
-    const selectedLines = lines.slice(startLine - 1, endLine);
+    
+    // Make sure we don't go out of bounds
+    const actualStartLine = Math.max(0, startLine - 1);
+    const actualEndLine = Math.min(lines.length, endLine);
+    
+    if (actualStartLine >= lines.length || actualEndLine <= 0 || actualStartLine >= actualEndLine) {
+      return `// Lines ${startLine}-${endLine} did not exist in this version of the file`;
+    }
+    
+    // Add line numbers to make it easier to follow
+    const selectedLines = lines.slice(actualStartLine, actualEndLine).map((line, idx) => {
+      const lineNum = actualStartLine + idx + 1;
+      return `${lineNum}: ${line}`;
+    });
     
     return selectedLines.join('\n');
   } catch (error) {
@@ -528,16 +592,26 @@ async function showHistoryInPeekView(
       const showDiff = config.get<boolean>('showDiff', true);
       
       // Format the content with commit info at the top
-      return [
+      const header = [
         `// Commit: ${commit.hash.substring(0, 7)} (${this._currentCommitIndex + 1}/${commits.length})`,
         `// Author: ${commit.author}`,
         `// Date: ${commit.date}`,
         `// Message: ${commit.message}`,
         `// Mode: ${showDiff ? 'Showing diff' : 'Showing state at commit'}`,
         `// Use 'Next Commit' and 'Previous Commit' buttons to navigate`,
-        '',
-        commit.content || '// No changes to these lines in this commit'
+        ''
       ].join('\n');
+      
+      // Check if content is empty or just whitespace
+      if (!commit.content || commit.content.trim() === '') {
+        if (showDiff) {
+          return header + '// No changes to these lines in this commit\n// Try switching to "Showing State" mode to see the content';
+        } else {
+          return header + '// These lines did not exist in this version of the file';
+        }
+      }
+      
+      return header + commit.content;
     }
   }(vscode.Uri.parse(`git-history:${document.uri.fsPath}`));
   
@@ -591,14 +665,20 @@ async function showHistoryInPeekView(
     const currentMode = config.get<boolean>('showDiff', true);
     await config.update('showDiff', !currentMode, vscode.ConfigurationTarget.Global);
     
-    // Refresh the view
-    const newCommits = await getLineHistory(filePath, startLine, endLine);
-    commits.length = 0;
-    commits.push(...newCommits);
-    historyProvider._onDidChange.fire(uri);
-    
-    // Update button text
-    toggleButton.text = !currentMode ? "$(diff) Showing Diff" : "$(file) Showing State";
+    try {
+      // Refresh the view
+      const filePath = document.uri.fsPath;
+      const newCommits = await getLineHistory(filePath, startLine + 1, endLine + 1); // Convert back to 1-based
+      commits.length = 0;
+      commits.push(...newCommits);
+      historyProvider._onDidChange.fire(uri);
+      
+      // Update button text
+      toggleButton.text = !currentMode ? "$(diff) Showing Diff" : "$(file) Showing State";
+    } catch (error) {
+      log(`Error refreshing view: ${error instanceof Error ? error.message : String(error)}`);
+      vscode.window.showErrorMessage(`Error refreshing view: ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
   
   // Show the peek view
