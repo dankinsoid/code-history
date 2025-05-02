@@ -12,6 +12,39 @@ const execAsync = promisify(exec);
 // Create an output channel for logging
 const outputChannel = vscode.window.createOutputChannel('Code History');
 
+// Command manager to handle registration/unregistration
+class CommandManager {
+  private static instance: CommandManager;
+  private registeredCommands: Map<string, vscode.Disposable> = new Map();
+  
+  private constructor() {}
+  
+  public static getInstance(): CommandManager {
+    if (!CommandManager.instance) {
+      CommandManager.instance = new CommandManager();
+    }
+    return CommandManager.instance;
+  }
+  
+  public async registerCommand(id: string, callback: (...args: any[]) => any): Promise<vscode.Disposable> {
+    // Unregister existing command if it exists
+    await this.unregisterCommand(id);
+    
+    // Register the new command
+    const disposable = vscode.commands.registerCommand(id, callback);
+    this.registeredCommands.set(id, disposable);
+    return disposable;
+  }
+  
+  public async unregisterCommand(id: string): Promise<void> {
+    const disposable = this.registeredCommands.get(id);
+    if (disposable) {
+      disposable.dispose();
+      this.registeredCommands.delete(id);
+    }
+  }
+}
+
 function log(message: string): void {
   console.log(message);
   outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
@@ -453,34 +486,21 @@ async function showHistoryInPeekView(
   // Create the URI for our virtual document
   const uri = vscode.Uri.parse(`git-history:${document.uri.fsPath}`);
   
-  // Register commands for navigating between commits
-  // First dispose any existing commands with the same ID
-  const existingDisposables = context.subscriptions.filter(d => 
-    (d as any)._command === 'codehistory.nextCommit' || 
-    (d as any)._command === 'codehistory.prevCommit'
-  );
-  existingDisposables.forEach(d => d.dispose());
+  // Get the command manager
+  const commandManager = CommandManager.getInstance();
   
-  const nextDisposable = vscode.commands.registerCommand('codehistory.nextCommit', () => {
+  // Register commands for navigating between commits
+  const nextDisposable = await commandManager.registerCommand('codehistory.nextCommit', () => {
     if (historyProvider.currentCommitIndex < commits.length - 1) {
       historyProvider.currentCommitIndex++;
     }
   });
   
-  const prevDisposable = vscode.commands.registerCommand('codehistory.prevCommit', () => {
+  const prevDisposable = await commandManager.registerCommand('codehistory.prevCommit', () => {
     if (historyProvider.currentCommitIndex > 0) {
       historyProvider.currentCommitIndex--;
     }
   });
-  
-  // Show the peek view
-  await vscode.commands.executeCommand('editor.action.showReferences',
-    document.uri,
-    // Position at the start of the selected range
-    new vscode.Position(startLine, 0),
-    // Create a location that points to our virtual document
-    [new vscode.Location(uri, new vscode.Position(0, 0))]
-  );
   
   // Add navigation buttons to the editor toolbar
   const nextButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -494,6 +514,15 @@ async function showHistoryInPeekView(
   prevButton.command = 'codehistory.prevCommit';
   prevButton.tooltip = 'Show previous commit';
   prevButton.show();
+  
+  // Show the peek view
+  await vscode.commands.executeCommand('editor.action.showReferences',
+    document.uri,
+    // Position at the start of the selected range
+    new vscode.Position(startLine, 0),
+    // Create a location that points to our virtual document
+    [new vscode.Location(uri, new vscode.Position(0, 0))]
+  );
   
   // Clean up when the peek view is closed
   const disposable = vscode.window.onDidChangeVisibleTextEditors(() => {
@@ -510,16 +539,10 @@ async function showHistoryInPeekView(
       prevButton.dispose();
       disposable.dispose();
       
-      // Re-register empty commands to prevent errors if status bar buttons are clicked after closing
-      const emptyNextCmd = vscode.commands.registerCommand('codehistory.nextCommit', () => {
-        vscode.window.showInformationMessage('History view is closed');
-      });
-      const emptyPrevCmd = vscode.commands.registerCommand('codehistory.prevCommit', () => {
-        vscode.window.showInformationMessage('History view is closed');
-      });
-      
-      // These will be disposed when the extension is deactivated
-      context.subscriptions.push(emptyNextCmd, emptyPrevCmd);
+      // Unregister the commands
+      const commandManager = CommandManager.getInstance();
+      commandManager.unregisterCommand('codehistory.nextCommit');
+      commandManager.unregisterCommand('codehistory.prevCommit');
     }
   });
 }
