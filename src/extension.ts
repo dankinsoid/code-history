@@ -355,69 +355,140 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
     const relativeFilePath = path.relative(gitRootPath, filePath);
     log(`Relative file path for git commands: ${relativeFilePath}`);
     
-    // Get the commit history for the specified lines
-    // Use -p to include the patch/diff in the output
-    const gitLogCommand = `git -C "${gitRootPath}" log --format="%H|%ad|%an|%s" --date=short -p -L ${startLine},${endLine}:${relativeFilePath}`;
-    log(`Executing git log command: ${gitLogCommand}`);
+    // Get user preference for showing diff or state
+    const config = vscode.workspace.getConfiguration('codehistory');
+    const showDiff = config.get<boolean>('showDiff', true);
+    log(`Show diff mode: ${showDiff}`);
     
-    let logOutput;
-    try {
-      const { stdout } = await execAsync(gitLogCommand);
-      logOutput = stdout;
-      
-      if (!logOutput.trim()) {
-        log('Git log command returned empty output');
-        return [];
-      }
-      
-      log(`Git log output length: ${logOutput.length} characters`);
-    } catch (logError) {
-      log(`Error executing git log command: ${logError instanceof Error ? logError.message : String(logError)}`);
-      
-      // Check for specific error messages
-      const errorMsg = logError instanceof Error ? logError.message : String(logError);
-      if (errorMsg.includes("no such path") || errorMsg.includes("does not exist in")) {
-        throw new Error("This file or the selected lines have no commit history yet");
-      } else if (errorMsg.includes("has only")) {
-        throw new Error("The selected line range is outside the file's content in the repository");
-      } else {
-        throw logError;
+    // Step 1: Get commit hashes from git blame for the selected lines
+    const blameCommand = `git -C "${gitRootPath}" blame -L ${startLine},${endLine} "${relativeFilePath}" --porcelain`;
+    log(`Executing git blame command: ${blameCommand}`);
+    
+    const { stdout: blameOutput } = await execAsync(blameCommand);
+    if (!blameOutput.trim()) {
+      log('Git blame command returned empty output');
+      return [];
+    }
+    
+    // Parse blame output to get commit hashes
+    const commitHashes = new Set<string>();
+    const blameLines = blameOutput.split('\n');
+    
+    for (let i = 0; i < blameLines.length; i++) {
+      const line = blameLines[i];
+      if (line.match(/^[0-9a-f]{40}\s/)) {
+        const hash = line.split(' ')[0];
+        if (hash !== '0000000000000000000000000000000000000000') {
+          commitHashes.add(hash);
+        }
       }
     }
-
+    
+    log(`Found ${commitHashes.size} unique commits affecting the selected lines`);
+    
     const commits: CommitInfo[] = [];
-    const commitChunks = logOutput.split(/^commit /m).filter(Boolean);
-
-    for (const chunk of commitChunks) {
-      const lines = chunk.trim().split('\n');
-      const [hash, date, author, message] = lines[0].split('|');
-      
-      // Extract the content part (after the diff header)
-      const contentStartIndex = lines.findIndex(line => line.startsWith('@@'));
-      let content = '';
-      
-      if (contentStartIndex !== -1) {
-        // Get only the lines that start with '+' or ' ' (added or unchanged lines)
-        // and remove the prefix
-        content = lines.slice(contentStartIndex + 1)
-          .filter(line => line.startsWith('+') || line.startsWith(' '))
-          .map(line => line.startsWith('+') ? line.substring(1) : line.startsWith(' ') ? line.substring(1) : line)
-          .join('\n');
+    
+    // Step 2: Get details for each commit
+    for (const hash of commitHashes) {
+      try {
+        // Get commit details
+        const { stdout: commitDetails } = await execAsync(
+          `git -C "${gitRootPath}" show --format="%H|%ad|%an|%s" --date=short ${hash} -s`,
+          { encoding: 'utf8' }
+        );
+        
+        const [commitHash, date, author, message] = commitDetails.trim().split('|');
+        
+        let content = '';
+        
+        if (showDiff) {
+          // Get the diff for this commit, limited to the selected lines
+          try {
+            // First, get the parent commit
+            const { stdout: parentOutput } = await execAsync(
+              `git -C "${gitRootPath}" rev-parse ${hash}^`,
+              { encoding: 'utf8' }
+            );
+            const parentHash = parentOutput.trim();
+            
+            // Then get the diff between parent and this commit for the selected lines
+            const diffCommand = `git -C "${gitRootPath}" diff ${parentHash} ${hash} -- "${relativeFilePath}" | grep -A 10000 -E "^@@.*\\+${startLine}(,|$)" | head -n 100`;
+            log(`Executing diff command: ${diffCommand}`);
+            
+            try {
+              const { stdout: diffOutput } = await execAsync(diffCommand);
+              
+              // Process the diff output to extract just the relevant lines
+              const diffLines = diffOutput.split('\n');
+              const relevantLines = diffLines.filter(line => 
+                line.startsWith('+') || line.startsWith('-') || line.startsWith(' ')
+              ).map(line => line);
+              
+              content = relevantLines.join('\n');
+            } catch (diffError) {
+              log(`Error getting diff: ${diffError instanceof Error ? diffError.message : String(diffError)}`);
+              // If diff fails, fall back to showing the state
+              content = await getFileStateAtCommit(gitRootPath, relativeFilePath, hash, startLine, endLine);
+            }
+          } catch (parentError) {
+            log(`Error getting parent commit: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
+            // If getting parent fails (e.g., for first commit), fall back to showing the state
+            content = await getFileStateAtCommit(gitRootPath, relativeFilePath, hash, startLine, endLine);
+          }
+        } else {
+          // Get the state of the file at this commit
+          content = await getFileStateAtCommit(gitRootPath, relativeFilePath, hash, startLine, endLine);
+        }
+        
+        commits.push({
+          hash: commitHash,
+          date,
+          author,
+          message,
+          content
+        });
+      } catch (error) {
+        log(`Error processing commit ${hash}: ${error instanceof Error ? error.message : String(error)}`);
       }
-
-      commits.push({
-        hash,
-        date,
-        author,
-        message,
-        content
-      });
     }
-
+    
+    // Sort commits by date (newest first)
+    commits.sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+      return dateB.getTime() - dateA.getTime();
+    });
+    
     return commits;
   } catch (error) {
     console.error('Error getting line history:', error);
     throw new Error(`Failed to get line history: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// Helper function to get the state of a file at a specific commit
+async function getFileStateAtCommit(
+  gitRootPath: string,
+  relativeFilePath: string,
+  commitHash: string,
+  startLine: number,
+  endLine: number
+): Promise<string> {
+  try {
+    // Get the file content at this commit
+    const { stdout: fileContent } = await execAsync(
+      `git -C "${gitRootPath}" show ${commitHash}:${relativeFilePath}`,
+      { encoding: 'utf8' }
+    );
+    
+    // Extract just the lines we're interested in
+    const lines = fileContent.split('\n');
+    const selectedLines = lines.slice(startLine - 1, endLine);
+    
+    return selectedLines.join('\n');
+  } catch (error) {
+    log(`Error getting file state: ${error instanceof Error ? error.message : String(error)}`);
+    return `// File did not exist at this commit or lines were outside the file's content`;
   }
 }
 
@@ -453,19 +524,19 @@ async function showHistoryInPeekView(
     
     provideTextDocumentContent(_uri: vscode.Uri): string {
       const commit = commits[this._currentCommitIndex];
+      const config = vscode.workspace.getConfiguration('codehistory');
+      const showDiff = config.get<boolean>('showDiff', true);
       
       // Format the content with commit info at the top
       return [
-        `// Commit: ${commit.hash.substring(0, 7)}`,
+        `// Commit: ${commit.hash.substring(0, 7)} (${this._currentCommitIndex + 1}/${commits.length})`,
         `// Author: ${commit.author}`,
         `// Date: ${commit.date}`,
         `// Message: ${commit.message}`,
-        `// (${this._currentCommitIndex + 1}/${commits.length})`,
+        `// Mode: ${showDiff ? 'Showing diff' : 'Showing state at commit'}`,
         `// Use 'Next Commit' and 'Previous Commit' buttons to navigate`,
         '',
-        // Only show the relevant content from the commit
-        // The git log -L command already filters to just the selected lines
-        commit.content
+        commit.content || '// No changes to these lines in this commit'
       ].join('\n');
     }
   }(vscode.Uri.parse(`git-history:${document.uri.fsPath}`));
@@ -505,6 +576,31 @@ async function showHistoryInPeekView(
   prevButton.tooltip = 'Show previous commit';
   prevButton.show();
   
+  // Add toggle button for diff/state view
+  const toggleButton = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+  const config = vscode.workspace.getConfiguration('codehistory');
+  const showDiff = config.get<boolean>('showDiff', true);
+  toggleButton.text = showDiff ? "$(diff) Showing Diff" : "$(file) Showing State";
+  toggleButton.command = 'codehistory.toggleViewMode';
+  toggleButton.tooltip = 'Toggle between diff and state view';
+  toggleButton.show();
+  
+  // Register toggle command
+  const toggleDisposable = await commandManager.registerCommand('codehistory.toggleViewMode', async () => {
+    const config = vscode.workspace.getConfiguration('codehistory');
+    const currentMode = config.get<boolean>('showDiff', true);
+    await config.update('showDiff', !currentMode, vscode.ConfigurationTarget.Global);
+    
+    // Refresh the view
+    const newCommits = await getLineHistory(filePath, startLine, endLine);
+    commits.length = 0;
+    commits.push(...newCommits);
+    historyProvider._onDidChange.fire(uri);
+    
+    // Update button text
+    toggleButton.text = !currentMode ? "$(diff) Showing Diff" : "$(file) Showing State";
+  });
+  
   // Show the peek view
   await vscode.commands.executeCommand('editor.action.showReferences',
     document.uri,
@@ -525,14 +621,17 @@ async function showHistoryInPeekView(
       registration.dispose();
       nextDisposable.dispose();
       prevDisposable.dispose();
+      toggleDisposable.dispose();
       nextButton.dispose();
       prevButton.dispose();
+      toggleButton.dispose();
       disposable.dispose();
       
       // Unregister the commands
       const commandManager = CommandManager.getInstance();
       commandManager.unregisterCommand('codehistory.nextCommit');
       commandManager.unregisterCommand('codehistory.prevCommit');
+      commandManager.unregisterCommand('codehistory.toggleViewMode');
     }
   });
 }

@@ -24,6 +24,10 @@
       {
         "command": "codehistory.prevCommit",
         "title": "Previous Commit"
+      },
+      {
+        "command": "codehistory.toggleViewMode",
+        "title": "Toggle History View Mode"
       }
     ],
     "menus": {
@@ -42,6 +46,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable CodeLens for line history"
+        },
+        "codehistory.showDiff": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show diff for each commit instead of the state of lines"
         }
       }
     }
