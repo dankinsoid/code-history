@@ -59,6 +59,8 @@ interface CommitInfo {
 }
 
 // Class for providing line history completions
+let myCompletionSessionActive = false;
+
 class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
   async provideCompletionItems(
     document: vscode.TextDocument,
@@ -66,6 +68,10 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
     token: vscode.CancellationToken,
     context: vscode.CompletionContext
   ): Promise<vscode.CompletionItem[] | undefined> {
+    if (!myCompletionSessionActive) {
+      return [];
+    }
+
     try {
       // Get line history for the current line
       const filePath = document.uri.fsPath;
@@ -80,7 +86,7 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       
       // Get commit history with content using git log
       // This command gets the commits and shows the actual content of each version of the line
-      const logCommand = `git -C "${gitRootPath}" log -p --format="%H|%ad|%an|%s" --date=short -L ${lineNumber},${lineNumber}:"${relativeFilePath}"`;
+      const logCommand = `git -C "${gitRootPath}" log -p --format="%H|%ad|%an|%s" --date=unix -L ${lineNumber},${lineNumber}:"${relativeFilePath}"`;
       log(`Executing git log command: ${logCommand}`);
       
       const { stdout: logOutput } = await execAsync(logCommand);
@@ -89,10 +95,10 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       }
       
       // Parse the log output to extract commits and their line content
-      const commits: Array<{hash: string, date: string, author: string, message: string, content: string}> = [];
+      const commits: Array<{hash: string, date: string, timestamp: number, author: string, message: string, content: string}> = [];
       const logLines = logOutput.split('\n');
       
-      let currentCommit: {hash: string, date: string, author: string, message: string, content: string} | null = null;
+      let currentCommit: {hash: string, date: string, timestamp: number, author: string, message: string, content: string} | null = null;
       let inHunk = false;
       
       for (let i = 0; i < logLines.length; i++) {
@@ -105,7 +111,8 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
           
           currentCommit = {
             hash,
-            date,
+            date: new Date(parseInt(date, 10) * 1000).toISOString().split('T')[0], // Convert to ISO date
+            timestamp: parseInt(date, 10),
             author,
             message,
             content: ''
@@ -139,39 +146,8 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         // Skip commits where we couldn't extract the line content
         if (!commit.content) continue;
         
-        // Create completion item with a label that shows the difference
-        // Get the current line text for comparison
-        const currentLineText = document.lineAt(position.line).text;
-        
-        // Create a label that shows the difference
-        let label = commit.content.substring(0, 30).trim();
-        
-        // If we can calculate a meaningful diff, show it in the label
-        if (currentLineText && commit.content) {
-          // Find the first different character
-          let diffIndex = 0;
-          const minLength = Math.min(currentLineText.length, commit.content.length);
-          
-          while (diffIndex < minLength && currentLineText[diffIndex] === commit.content[diffIndex]) {
-            diffIndex++;
-          }
-          
-          // Create a label that highlights the difference
-          if (diffIndex < minLength) {
-            // Show context before the difference
-            const contextStart = Math.max(0, diffIndex - 10);
-            const prefix = diffIndex > 10 ? '...' : '';
-            
-            // Extract the different parts
-            const currentSuffix = currentLineText.substring(diffIndex, diffIndex + 15);
-            const commitSuffix = commit.content.substring(diffIndex, diffIndex + 15);
-            
-            label = `${prefix}${commit.content.substring(contextStart, diffIndex)}[${commitSuffix}${commitSuffix.length >= 15 ? '...' : ''}]`;
-          }
-        }
-        
         const item = new vscode.CompletionItem(
-          label,
+          `${commit.date}, ${commit.author}`,
           vscode.CompletionItemKind.Text
         );
         
@@ -185,22 +161,26 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         );
         
         // Add details that will show in the completion item
-        item.detail = `${commit.date} - ${commit.hash.substring(0, 7)} - ${commit.message.substring(0, 30)}${commit.message.length > 30 ? '...' : ''}`;
+        item.detail = commit.message
+
+        const language = detectMarkdownCodeLanguage(document.uri);
+
         item.documentation = new vscode.MarkdownString(
-          `**Commit:** ${commit.hash.substring(0, 7)}\n` +
-          `**Author:** ${commit.author}\n` +
-          `**Date:** ${commit.date}\n` +
-          `**Message:** ${commit.message}\n\n` +
-          `\`\`\`\n${lineNumber}: ${commit.content}\n\`\`\``
+          `\`\`\`${language}\n${commit.content.trim()}\n\`\`\``
         );
         
         // Set a filter text to make it easier to find
-        item.filterText = `${commit.date} ${commit.message} ${commit.author} ${commit.content}`;
+        item.filterText = document.getText(new vscode.Range(
+          position.line,
+          0,
+          position.line,
+          Math.min(document.lineAt(position.line).text.length, position.character + 10)
+        ));
         
         // Set a sort text to ensure oldest commits appear first
         // Format the date as a string that will sort chronologically (oldest first)
         // Add a prefix to ensure consistent sorting
-        item.sortText = commit.date;
+        item.sortText = (99999999999 - commit.timestamp).toString().padStart(15, '0');
         
         completionItems.push(item);
       }
@@ -214,6 +194,34 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       log(`Error providing completions: ${errorMessage}`);
       return undefined;
     }
+  }
+}
+
+function detectMarkdownCodeLanguage(uri: vscode.Uri): string {
+  const ext = path.extname(uri.fsPath).toLowerCase();
+  switch (ext) {
+    case '.js':
+    case '.jsx':
+      return 'javascript';
+    case '.ts':
+    case '.tsx':
+      return 'typescript';
+    case '.py':
+      return 'python';
+    case '.cpp':
+      return 'c';
+    case '.html':
+    case '.htm':
+      return 'html';
+    case '.clj':
+    case '.cljs':
+    case '.cljd':
+    case '.cljc':
+      return 'clojure';
+    case '.rb':
+      return 'ruby';
+    default:
+      return ext.substring(1); // Use the file extension as the language
   }
 }
 
@@ -291,8 +299,7 @@ class GitHistoryInlineCompletionProvider implements vscode.InlineCompletionItemP
       }
       
       return {
-        items: inlineCompletionItems,
-        suppressSuggestionDetails: false
+        items: inlineCompletionItems
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -369,9 +376,7 @@ export function activate(context: vscode.ExtensionContext) {
     { scheme: 'file' },
     completionProvider,
     // Add trigger characters to make it easier to invoke
-    '.',
-    ':',
-    '>'
+    'ƛ'
   );
   context.subscriptions.push(completionRegistration);
   
@@ -445,7 +450,10 @@ export function activate(context: vscode.ExtensionContext) {
         cancellable: false
       }, async (progress) => {
         try {
-          // Trigger the completion provider
+          myCompletionSessionActive = true;
+          setTimeout(() => {
+            myCompletionSessionActive = false;
+          }, 200);
           await vscode.commands.executeCommand('editor.action.triggerSuggest');
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
