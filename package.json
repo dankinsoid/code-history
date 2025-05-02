@@ -64,11 +64,6 @@
     "configuration": {
       "title": "Code History",
       "properties": {
-        "codehistory.enableCodeLens": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable CodeLens for line history"
-        },
         "codehistory.showDiff": {
           "type": "boolean",
           "default": false,
