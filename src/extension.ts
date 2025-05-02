@@ -333,7 +333,8 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
     log(`Relative file path for git commands: ${relativeFilePath}`);
     
     // Get the commit history for the specified lines
-    const gitLogCommand = `git -C "${gitRootPath}" log --format="%H|%ad|%an|%s" --date=short -L ${startLine},${endLine}:${relativeFilePath}`;
+    // Use -p to include the patch/diff in the output
+    const gitLogCommand = `git -C "${gitRootPath}" log --format="%H|%ad|%an|%s" --date=short -p -L ${startLine},${endLine}:${relativeFilePath}`;
     log(`Executing git log command: ${gitLogCommand}`);
     
     let logOutput;
@@ -373,7 +374,12 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
       let content = '';
       
       if (contentStartIndex !== -1) {
-        content = lines.slice(contentStartIndex + 1).join('\n');
+        // Get only the lines that start with '+' or ' ' (added or unchanged lines)
+        // and remove the prefix
+        content = lines.slice(contentStartIndex + 1)
+          .filter(line => line.startsWith('+') || line.startsWith(' '))
+          .map(line => line.startsWith('+') ? line.substring(1) : line.startsWith(' ') ? line.substring(1) : line)
+          .join('\n');
       }
 
       commits.push({
@@ -434,6 +440,8 @@ async function showHistoryInPeekView(
         `// (${this._currentCommitIndex + 1}/${commits.length})`,
         `// Use 'Next Commit' and 'Previous Commit' buttons to navigate`,
         '',
+        // Only show the relevant content from the commit
+        // The git log -L command already filters to just the selected lines
         commit.content
       ].join('\n');
     }
@@ -468,7 +476,9 @@ async function showHistoryInPeekView(
   // Show the peek view
   await vscode.commands.executeCommand('editor.action.showReferences',
     document.uri,
+    // Position at the start of the selected range
     new vscode.Position(startLine, 0),
+    // Create a location that points to our virtual document
     [new vscode.Location(uri, new vscode.Position(0, 0))]
   );
   
