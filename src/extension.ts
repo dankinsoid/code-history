@@ -141,7 +141,7 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         
         // Create completion item with a label that will show in the UI
         const item = new vscode.CompletionItem(
-          `${commit.date} - ${commit.message.substring(0, 30)}${commit.message.length > 30 ? '...' : ''} (${commit.hash.substring(0, 7)})`,
+          `${commit.content.substring(0, 30).trim()}`,
           vscode.CompletionItemKind.Text
         );
         
@@ -156,6 +156,7 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         
         // Add details that will show in the completion item
         item.detail = `${commit.author} - ${commit.date}`;
+          // `${commit.date} - ${commit.message.substring(0, 30)}${commit.message.length > 30 ? '...' : ''} (${commit.hash.substring(0, 7)})`,
         item.documentation = new vscode.MarkdownString(
           `**Commit:** ${commit.hash.substring(0, 7)}\n` +
           `**Author:** ${commit.author}\n` +
