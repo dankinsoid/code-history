@@ -357,7 +357,7 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
     
     // Get user preference for showing diff or state
     const config = vscode.workspace.getConfiguration('codehistory');
-    const showDiff = config.get<boolean>('showDiff', true);
+    const showDiff = config.get<boolean>('showDiff', false);
     log(`Show diff mode: ${showDiff}`);
     
     // Step 1: Get commit hashes from git blame for the selected lines
