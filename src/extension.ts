@@ -83,8 +83,9 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       const gitRootPath = await getGitRootPath(filePath);
       const relativeFilePath = path.relative(gitRootPath, filePath);
       
-      // Get commit hashes from git log
-      const logCommand = `git -C "${gitRootPath}" log --format="%H" -L ${lineNumber},${lineNumber}:"${relativeFilePath}"`;
+      // Get commit history with content using git log
+      // This command gets the commits and shows the actual content of each version of the line
+      const logCommand = `git -C "${gitRootPath}" log -p --format="%H|%ad|%an|%s" --date=short -L ${lineNumber},${lineNumber}:"${relativeFilePath}"`;
       log(`Executing git log command: ${logCommand}`);
       
       const { stdout: logOutput } = await execAsync(logCommand);
@@ -94,53 +95,69 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
 
       console.log(`Log output: ${logOutput}`);
       
-      // Parse log output to get commit hashes
-      const commitHashes = new Set<string>();
+      // Parse the log output to extract commits and their line content
+      const commits: Array<{hash: string, date: string, author: string, message: string, content: string}> = [];
       const logLines = logOutput.split('\n');
       
-      for (const line of logLines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine.match(/^[0-9a-f]{40}$/)) {
-          commitHashes.add(trimmedLine);
+      let currentCommit: {hash: string, date: string, author: string, message: string, content: string} | null = null;
+      let inHunk = false;
+      
+      for (let i = 0; i < logLines.length; i++) {
+        const line = logLines[i].trim();
+        
+        // Check for commit header line
+        if (line.includes('|') && line.match(/^[0-9a-f]{40}\|/)) {
+          const [hash, date, author, ...messageParts] = line.split('|');
+          const message = messageParts.join('|'); // Rejoin message parts in case it contained |
+          
+          currentCommit = {
+            hash,
+            date,
+            author,
+            message,
+            content: ''
+          };
+          
+          commits.push(currentCommit);
+          inHunk = false;
+        }
+        // Look for the hunk header for our line
+        else if (line.startsWith('@@') && currentCommit) {
+          inHunk = true;
+        }
+        // If we're in a hunk and find a + line, it's the content we want
+        else if (inHunk && line.startsWith('+') && currentCommit) {
+          // Remove the + prefix to get the actual line content
+          currentCommit.content = line.substring(1);
+          inHunk = false; // We found what we needed
         }
       }
       
-      if (commitHashes.size === 0) {
+      if (commits.length === 0) {
         return undefined;
       }
       
       // Create completion items for each commit
       const completionItems: vscode.CompletionItem[] = [];
       
-      for (const hash of commitHashes) {
-        // Get commit details
-        const { stdout: commitDetails } = await execAsync(
-          `git -C "${gitRootPath}" show --format="%H|%ad|%an|%s" --date=short ${hash} -s`,
-          { encoding: 'utf8' }
-        );
-        
-        const [commitHash, date, author, message] = commitDetails.trim().split('|');
-        
-        // Get the file content at this commit
-        const content = await getFileStateAtCommit(gitRootPath, relativeFilePath, hash, lineNumber, lineNumber);
-        
-        // Extract just the line content without the line number prefix
-        const lineContent = content.replace(/^\d+:\s/, '');
+      for (const commit of commits) {
+        // Skip commits where we couldn't extract the line content
+        if (!commit.content) continue;
         
         // Create completion item
         const item = new vscode.CompletionItem(
-          `${date} - ${message} (${commitHash.substring(0, 7)})`,
+          `${commit.date} - ${commit.message} (${commit.hash.substring(0, 7)})`,
           vscode.CompletionItemKind.Text
         );
         
-        item.insertText = lineContent;
-        item.detail = `${author} - ${date}`;
+        item.insertText = commit.content;
+        item.detail = `${commit.author} - ${commit.date}`;
         item.documentation = new vscode.MarkdownString(
-          `**Commit:** ${commitHash.substring(0, 7)}\n` +
-          `**Author:** ${author}\n` +
-          `**Date:** ${date}\n` +
-          `**Message:** ${message}\n\n` +
-          `\`\`\`\n${content}\n\`\`\``
+          `**Commit:** ${commit.hash.substring(0, 7)}\n` +
+          `**Author:** ${commit.author}\n` +
+          `**Date:** ${commit.date}\n` +
+          `**Message:** ${commit.message}\n\n` +
+          `\`\`\`\n${lineNumber}: ${commit.content}\n\`\`\``
         );
         
         completionItems.push(item);
