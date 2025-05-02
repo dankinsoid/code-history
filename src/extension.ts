@@ -31,6 +31,14 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   const lineHistoryDisposable = vscode.commands.registerCommand('codehistory.showLineHistory', async () => {
+    // First check if git is installed
+    try {
+      await execAsync('git --version');
+    } catch (error) {
+      vscode.window.showErrorMessage('Git is not installed or not available in PATH. Please install Git to use this extension.');
+      return;
+    }
+    
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       vscode.window.showErrorMessage('No active editor found');
@@ -107,6 +115,10 @@ export function activate(context: vscode.ExtensionContext) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           if (errorMessage.includes("not a git repository") || errorMessage.includes("not in a git repository")) {
             vscode.window.showErrorMessage("The file is not in a git repository. Git history is only available for files tracked in git.");
+          } else if (errorMessage.includes("does not exist in")) {
+            vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.");
+          } else if (errorMessage.includes("no such path")) {
+            vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.");
           } else {
             vscode.window.showErrorMessage(`Error retrieving history: ${errorMessage}`);
           }
@@ -116,6 +128,10 @@ export function activate(context: vscode.ExtensionContext) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage.includes("not a git repository") || errorMessage.includes("not in a git repository")) {
         vscode.window.showErrorMessage("The file is not in a git repository. Git history is only available for files tracked in git.");
+      } else if (errorMessage.includes("does not exist in")) {
+        vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.");
+      } else if (errorMessage.includes("no such path")) {
+        vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.");
       } else {
         vscode.window.showErrorMessage(`Error: ${errorMessage}`);
       }
@@ -129,8 +145,11 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
   try {
     // First check if the file is in a git repository
     try {
+      // Use dirname to get the directory containing the file
+      const dirPath = filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
+      
       const { stdout: gitRootOutput } = await execAsync(
-        `git -C "${filePath.substring(0, filePath.lastIndexOf('/'))}" rev-parse --show-toplevel`
+        `git -C "${dirPath}" rev-parse --show-toplevel`
       );
       
       if (!gitRootOutput.trim()) {
