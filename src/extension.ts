@@ -38,6 +38,13 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     const document = editor.document;
+    
+    // Check if the document is saved
+    if (document.isDirty) {
+      vscode.window.showWarningMessage('Please save the file before viewing its history');
+      return;
+    }
+    
     const filePath = document.uri.fsPath;
     const selection = editor.selection;
     
@@ -93,11 +100,21 @@ export function activate(context: vscode.ExtensionContext) {
             context.subscriptions
           );
         } catch (error) {
-          vscode.window.showErrorMessage(`Error retrieving history: ${error instanceof Error ? error.message : String(error)}`);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes("not a git repository") || errorMessage.includes("not in a git repository")) {
+            vscode.window.showErrorMessage("The file is not in a git repository. Git history is only available for files tracked in git.");
+          } else {
+            vscode.window.showErrorMessage(`Error retrieving history: ${errorMessage}`);
+          }
         }
       });
     } catch (error) {
-      vscode.window.showErrorMessage(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes("not a git repository") || errorMessage.includes("not in a git repository")) {
+        vscode.window.showErrorMessage("The file is not in a git repository. Git history is only available for files tracked in git.");
+      } else {
+        vscode.window.showErrorMessage(`Error: ${errorMessage}`);
+      }
     }
   });
 
@@ -106,6 +123,19 @@ export function activate(context: vscode.ExtensionContext) {
 
 async function getLineHistory(filePath: string, startLine: number, endLine: number): Promise<CommitInfo[]> {
   try {
+    // First check if the file is in a git repository
+    try {
+      const { stdout: gitRootOutput } = await execAsync(
+        `git -C "${filePath.substring(0, filePath.lastIndexOf('/'))}" rev-parse --show-toplevel`
+      );
+      
+      if (!gitRootOutput.trim()) {
+        throw new Error("Not a git repository");
+      }
+    } catch (error) {
+      throw new Error("The file is not in a git repository");
+    }
+    
     // Get the commit history for the specified lines
     const { stdout: logOutput } = await execAsync(
       `git log --format="%H|%ad|%an|%s" --date=short -L ${startLine},${endLine}:${filePath}`
