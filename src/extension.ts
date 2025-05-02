@@ -92,8 +92,6 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       if (!logOutput.trim()) {
         return undefined;
       }
-
-      console.log(`Log output: ${logOutput}`);
       
       // Parse the log output to extract commits and their line content
       const commits: Array<{hash: string, date: string, author: string, message: string, content: string}> = [];
@@ -132,6 +130,8 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
           inHunk = false; // We found what we needed
         }
       }
+
+      console.log('Count of commits:', commits.length);
       
       if (commits.length === 0) {
         return undefined;
@@ -162,6 +162,8 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         
         completionItems.push(item);
       }
+
+      console.log('Count of completion items:', completionItems.length);
       
       return completionItems;
     } catch (error) {
