@@ -167,8 +167,16 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         // Set a filter text to make it easier to find
         item.filterText = `${commit.date} ${commit.message} ${commit.author} ${commit.content}`;
         
-        // Set a sort text to ensure newest commits appear first
-        item.sortText = commit.date;
+        // Set a sort text to ensure oldest commits appear first (reverse chronological order)
+        // We need to invert the date to make older dates sort first
+        const dateObj = new Date(commit.date);
+        const invertedDate = '9999-99-99'.replace(/9/g, '0').replace(
+          /^(\d{4})-(\d{2})-(\d{2})$/,
+          (_, year, month, day) => {
+            return `${9999 - parseInt(year)}-${99 - parseInt(month)}-${99 - parseInt(day)}`;
+          }
+        );
+        item.sortText = invertedDate;
         
         completionItems.push(item);
       }
