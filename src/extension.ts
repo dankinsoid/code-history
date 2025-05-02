@@ -137,35 +137,27 @@ export function activate(context: vscode.ExtensionContext) {
           // Show output channel with logs
           outputChannel.show(true);
           
+          // Create a more user-friendly error message
+          let userMessage = `Error retrieving history: ${errorMessage}`;
+          
           if (errorMessage.includes("not a git repository") || errorMessage.includes("not in a git repository")) {
-            vscode.window.showErrorMessage("The file is not in a git repository. Git history is only available for files tracked in git.", "Show Logs")
-              .then(selection => {
-                if (selection === "Show Logs") {
-                  outputChannel.show(true);
-                }
-              });
-          } else if (errorMessage.includes("does not exist in")) {
-            vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.", "Show Logs")
-              .then(selection => {
-                if (selection === "Show Logs") {
-                  outputChannel.show(true);
-                }
-              });
-          } else if (errorMessage.includes("no such path")) {
-            vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.", "Show Logs")
-              .then(selection => {
-                if (selection === "Show Logs") {
-                  outputChannel.show(true);
-                }
-              });
-          } else {
-            vscode.window.showErrorMessage(`Error retrieving history: ${errorMessage}`, "Show Logs")
-              .then(selection => {
-                if (selection === "Show Logs") {
-                  outputChannel.show(true);
-                }
-              });
+            userMessage = "The file is not in a git repository. Git history is only available for files tracked in git.";
+          } else if (errorMessage.includes("not tracked in git")) {
+            userMessage = "This file is not tracked in git. Only committed files have history.";
+          } else if (errorMessage.includes("does not exist in") || errorMessage.includes("no such path")) {
+            userMessage = "This file is not tracked in git or has no commit history yet.";
+          } else if (errorMessage.includes("no commit history")) {
+            userMessage = "The selected lines have no commit history yet.";
+          } else if (errorMessage.includes("outside the file's content")) {
+            userMessage = "The selected line range is outside the file's content in the repository.";
           }
+          
+          vscode.window.showErrorMessage(userMessage, "Show Logs")
+            .then(selection => {
+              if (selection === "Show Logs") {
+                outputChannel.show(true);
+              }
+            });
         }
       });
     } catch (error) {
@@ -175,35 +167,27 @@ export function activate(context: vscode.ExtensionContext) {
       // Show output channel with logs
       outputChannel.show(true);
       
+      // Create a more user-friendly error message
+      let userMessage = `Error: ${errorMessage}`;
+      
       if (errorMessage.includes("not a git repository") || errorMessage.includes("not in a git repository")) {
-        vscode.window.showErrorMessage("The file is not in a git repository. Git history is only available for files tracked in git.", "Show Logs")
-          .then(selection => {
-            if (selection === "Show Logs") {
-              outputChannel.show(true);
-            }
-          });
-      } else if (errorMessage.includes("does not exist in")) {
-        vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.", "Show Logs")
-          .then(selection => {
-            if (selection === "Show Logs") {
-              outputChannel.show(true);
-            }
-          });
-      } else if (errorMessage.includes("no such path")) {
-        vscode.window.showErrorMessage("This file is not tracked in git or has no commit history yet.", "Show Logs")
-          .then(selection => {
-            if (selection === "Show Logs") {
-              outputChannel.show(true);
-            }
-          });
-      } else {
-        vscode.window.showErrorMessage(`Error: ${errorMessage}`, "Show Logs")
-          .then(selection => {
-            if (selection === "Show Logs") {
-              outputChannel.show(true);
-            }
-          });
+        userMessage = "The file is not in a git repository. Git history is only available for files tracked in git.";
+      } else if (errorMessage.includes("not tracked in git")) {
+        userMessage = "This file is not tracked in git. Only committed files have history.";
+      } else if (errorMessage.includes("does not exist in") || errorMessage.includes("no such path")) {
+        userMessage = "This file is not tracked in git or has no commit history yet.";
+      } else if (errorMessage.includes("no commit history")) {
+        userMessage = "The selected lines have no commit history yet.";
+      } else if (errorMessage.includes("outside the file's content")) {
+        userMessage = "The selected line range is outside the file's content in the repository.";
       }
+      
+      vscode.window.showErrorMessage(userMessage, "Show Logs")
+        .then(selection => {
+          if (selection === "Show Logs") {
+            outputChannel.show(true);
+          }
+        });
     }
   });
 
@@ -216,62 +200,89 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
     
     // First check if the file is in a git repository
     try {
-      // Use dirname to get the directory containing the file
-      const dirPath = path.dirname(filePath);
-      log(`Directory path: ${dirPath}`);
+      // Get the directory of the file
+      const fileDir = path.dirname(filePath);
+      log(`File directory: ${fileDir}`);
       
-      // Check if .git directory exists in any parent directory
-      let currentDir = dirPath;
-      let isGitRepo = false;
+      // Find git repository root
       let gitRootPath = '';
       
-      while (currentDir !== path.parse(currentDir).root) {
-        log(`Checking for .git in: ${currentDir}`);
-        const gitDirPath = path.join(currentDir, '.git');
+      // Try to get the git root using git command first
+      try {
+        // Use the file's directory as the working directory for git
+        const { stdout } = await execAsync(`git -C "${fileDir}" rev-parse --show-toplevel`);
+        gitRootPath = stdout.trim();
+        log(`Git root from command: ${gitRootPath}`);
         
-        if (fs.existsSync(gitDirPath)) {
-          isGitRepo = true;
-          gitRootPath = currentDir;
-          log(`Found git repository at: ${gitRootPath}`);
-          break;
+        if (!gitRootPath) {
+          throw new Error("Empty git root path");
+        }
+      } catch (gitCmdError) {
+        log(`Git command error: ${gitCmdError instanceof Error ? gitCmdError.message : String(gitCmdError)}`);
+        
+        // Fallback to manual .git directory detection
+        let currentDir = fileDir;
+        let foundGitDir = false;
+        
+        while (currentDir !== path.parse(currentDir).root) {
+          log(`Checking for .git in: ${currentDir}`);
+          const gitDirPath = path.join(currentDir, '.git');
+          
+          if (fs.existsSync(gitDirPath)) {
+            gitRootPath = currentDir;
+            foundGitDir = true;
+            log(`Found git repository at: ${gitRootPath}`);
+            break;
+          }
+          
+          currentDir = path.dirname(currentDir);
         }
         
-        currentDir = path.dirname(currentDir);
-      }
-      
-      if (!isGitRepo) {
-        log('No .git directory found in any parent directory');
-        throw new Error("Not a git repository");
-      }
-      
-      // Double-check with git command
-      try {
-        const gitCommand = `git -C "${dirPath}" rev-parse --show-toplevel`;
-        log(`Executing git command: ${gitCommand}`);
-        
-        const { stdout: gitRootOutput } = await execAsync(gitCommand);
-        
-        if (!gitRootOutput.trim()) {
-          log('Git command returned empty output');
+        if (!foundGitDir) {
+          log('No .git directory found in any parent directory');
           throw new Error("Not a git repository");
         }
-        
-        log(`Git root from command: ${gitRootOutput.trim()}`);
-      } catch (gitError) {
-        log(`Error executing git command: ${gitError instanceof Error ? gitError.message : String(gitError)}`);
-        // Continue with our manual detection if git command fails
       }
+      
+      // Check if the file is tracked by git
+      try {
+        // Use git ls-files to check if the file is tracked
+        const relativeFilePath = path.relative(gitRootPath, filePath);
+        log(`Relative file path: ${relativeFilePath}`);
+        
+        const { stdout: lsFilesOutput } = await execAsync(`git -C "${gitRootPath}" ls-files --error-unmatch "${relativeFilePath}"`);
+        log(`Git ls-files output: ${lsFilesOutput.trim()}`);
+      } catch (lsFilesError) {
+        log(`File not tracked in git: ${lsFilesError instanceof Error ? lsFilesError.message : String(lsFilesError)}`);
+        throw new Error("File is not tracked in git");
+      }
+      
     } catch (error) {
       log(`Repository check error: ${error instanceof Error ? error.message : String(error)}`);
-      throw new Error("The file is not in a git repository");
+      if (error instanceof Error && error.message === "File is not tracked in git") {
+        throw new Error("The file is not tracked in git. Only files committed to the repository have history.");
+      } else {
+        throw new Error("The file is not in a git repository");
+      }
     }
     
+    // Get the git root directory
+    const { stdout: gitRootOutput } = await execAsync(`git -C "${path.dirname(filePath)}" rev-parse --show-toplevel`);
+    const gitRootPath = gitRootOutput.trim();
+    log(`Git root path: ${gitRootPath}`);
+    
+    // Get the relative path to the file from the git root
+    const relativeFilePath = path.relative(gitRootPath, filePath);
+    log(`Relative file path for git commands: ${relativeFilePath}`);
+    
     // Get the commit history for the specified lines
-    const gitLogCommand = `git log --format="%H|%ad|%an|%s" --date=short -L ${startLine},${endLine}:${filePath}`;
+    const gitLogCommand = `git -C "${gitRootPath}" log --format="%H|%ad|%an|%s" --date=short -L ${startLine},${endLine}:${relativeFilePath}`;
     log(`Executing git log command: ${gitLogCommand}`);
     
+    let logOutput;
     try {
-      const { stdout: logOutput } = await execAsync(gitLogCommand);
+      const { stdout } = await execAsync(gitLogCommand);
+      logOutput = stdout;
       
       if (!logOutput.trim()) {
         log('Git log command returned empty output');
@@ -281,7 +292,16 @@ async function getLineHistory(filePath: string, startLine: number, endLine: numb
       log(`Git log output length: ${logOutput.length} characters`);
     } catch (logError) {
       log(`Error executing git log command: ${logError instanceof Error ? logError.message : String(logError)}`);
-      throw logError;
+      
+      // Check for specific error messages
+      const errorMsg = logError instanceof Error ? logError.message : String(logError);
+      if (errorMsg.includes("no such path") || errorMsg.includes("does not exist in")) {
+        throw new Error("This file or the selected lines have no commit history yet");
+      } else if (errorMsg.includes("has only")) {
+        throw new Error("The selected line range is outside the file's content in the repository");
+      } else {
+        throw logError;
+      }
     }
 
     const commits: CommitInfo[] = [];
