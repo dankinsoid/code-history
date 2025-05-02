@@ -67,11 +67,6 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
     context: vscode.CompletionContext
   ): Promise<vscode.CompletionItem[] | undefined> {
     try {
-      // Only provide completions when explicitly triggered
-      if (context.triggerKind !== vscode.CompletionTriggerKind.Invoke) {
-        return undefined;
-      }
-      
       // Get line history for the current line
       const filePath = document.uri.fsPath;
       const lineNumber = position.line + 1; // Convert to 1-based
@@ -90,7 +85,7 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       
       const { stdout: logOutput } = await execAsync(logCommand);
       if (!logOutput.trim()) {
-        return undefined;
+        return [];
       }
       
       // Parse the log output to extract commits and their line content
@@ -134,7 +129,7 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
       console.log('Count of commits:', commits.length);
       
       if (commits.length === 0) {
-        return undefined;
+        return [];
       }
       
       // Create completion items for each commit
@@ -144,13 +139,16 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
         // Skip commits where we couldn't extract the line content
         if (!commit.content) continue;
         
-        // Create completion item
+        // Create completion item with a label that will show in the UI
         const item = new vscode.CompletionItem(
-          `${commit.date} - ${commit.message} (${commit.hash.substring(0, 7)})`,
+          `${commit.date} - ${commit.message.substring(0, 30)}${commit.message.length > 30 ? '...' : ''} (${commit.hash.substring(0, 7)})`,
           vscode.CompletionItemKind.Text
         );
         
+        // Set the text that will be inserted when selected
         item.insertText = commit.content;
+        
+        // Add details that will show in the completion item
         item.detail = `${commit.author} - ${commit.date}`;
         item.documentation = new vscode.MarkdownString(
           `**Commit:** ${commit.hash.substring(0, 7)}\n` +
@@ -160,11 +158,18 @@ class GitHistoryCompletionProvider implements vscode.CompletionItemProvider {
           `\`\`\`\n${lineNumber}: ${commit.content}\n\`\`\``
         );
         
+        // Set a filter text to make it easier to find
+        item.filterText = `${commit.date} ${commit.message} ${commit.author} ${commit.content}`;
+        
+        // Set a sort text to ensure newest commits appear first
+        item.sortText = commit.date;
+        
         completionItems.push(item);
       }
 
       console.log('Count of completion items:', completionItems.length);
       
+      // Always return an array, even if empty
       return completionItems;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -324,7 +329,11 @@ export function activate(context: vscode.ExtensionContext) {
   const completionProvider = new GitHistoryCompletionProvider();
   const completionRegistration = vscode.languages.registerCompletionItemProvider(
     { scheme: 'file' },
-    completionProvider
+    completionProvider,
+    // Add trigger characters to make it easier to invoke
+    '.',
+    ':',
+    '>'
   );
   context.subscriptions.push(completionRegistration);
   
@@ -391,8 +400,20 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       
-      // Trigger the completion provider
-      await vscode.commands.executeCommand('editor.action.triggerSuggest');
+      // Show a loading indicator
+      vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: "Loading line history...",
+        cancellable: false
+      }, async (progress) => {
+        try {
+          // Trigger the completion provider
+          await vscode.commands.executeCommand('editor.action.triggerSuggest');
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          vscode.window.showErrorMessage(`Error showing completions: ${errorMessage}`);
+        }
+      });
     }
   );
   
