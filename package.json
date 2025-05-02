@@ -14,10 +14,6 @@
   "contributes": {
     "commands": [
       {
-        "command": "codehistory.helloWorld",
-        "title": "Hello World"
-      },
-      {
         "command": "codehistory.showLineHistory",
         "title": "Show Line History"
       },
