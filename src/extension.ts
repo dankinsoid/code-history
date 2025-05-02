@@ -48,13 +48,17 @@ export function activate(context: vscode.ExtensionContext) {
     const filePath = document.uri.fsPath;
     const selection = editor.selection;
     
+    // If selection is empty, use the current cursor line
+    let startLine, endLine;
     if (selection.isEmpty) {
-      vscode.window.showInformationMessage('Please select one or more lines to view history');
-      return;
+      startLine = selection.active.line + 1; // Git uses 1-based line numbers
+      endLine = startLine;
+    } else {
+      startLine = selection.start.line + 1;
+      endLine = selection.end.line + 1;
     }
 
-    const startLine = selection.start.line + 1; // Git uses 1-based line numbers
-    const endLine = selection.end.line + 1;
+    // startLine and endLine are now defined above
 
     try {
       // Show a loading message
