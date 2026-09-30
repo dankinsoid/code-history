@@ -88,10 +88,6 @@ async function completions(
       if (!commit.content) continue
       
       const language = detectMarkdownCodeLanguage(data.document.uri)
-
-      // Set the text that will be inserted when selected
-      // Create a snippet that replaces the entire line
-      const lineText = data.document.lineAt(data.startLine).text
     
       const item: CodeHistoryCompletion = {
         label: `${commit.date}, ${commit.author}`,
@@ -99,7 +95,7 @@ async function completions(
         documentation: new vscode.MarkdownString(`\`\`\`${language}\n${commit.content.trim()}\n\`\`\``),
         range: new vscode.Range(
           data.startLine, 0,
-          data.endLine, lineText.length
+          data.endLine, data.document.lineAt(data.endLine).text.length
         ),
         insertText: commit.content,
         detail: commit.message,
